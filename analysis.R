@@ -4,12 +4,21 @@
 library(tidyverse)
 
 
+calc_income_cap <- function(
+  max_payment,
+  thresholds,
+  rates
+) {
+  # Calculate maximum income before payment actually reduces to $0.
+  uniroot(function(x) max_payment - (thresholds[2] - thresholds[1])*rates[1] - (x - thresholds[2])*rates[2], interval = c(500, 2000))$root
+}
+
 set_situation <- function(
   label,
   max_payment,
   thresholds,
-  rates,
-  income_cap
+  rates
+  # income_cap
 ) {
   # Construct situation object
   # args:
@@ -29,7 +38,8 @@ set_situation <- function(
       t2 = thresholds[2],
       r2 = rates[2],
       step = (thresholds[2] - thresholds[1])*rates[1],
-      income_cap = income_cap
+      # income_cap = income_cap
+      income_cap = calc_income_cap(max_payment, thresholds, rates)
     )
   )
 }
@@ -46,16 +56,16 @@ payment_received <- function(situation, x) {
                 ifelse(x < situation$income_cap, situation$max_payment - situation$step - (x-situation$t2)*situation$r2, 0)))
 }
 
-stated_income_cap <- function(situation) {
-  # Retreive stated maximum income before payment reduces to $0 from situation.
-  situation$income_cap
-}
-
-calc_income_cap <- function(situation) {
-  # Calculate maximum income before payment actually reduces to $0.
-  root <- uniroot(function(x) situation$max_payment - situation$step - (x-situation$t2)*situation$r2, interval = c(500, 2000))$root
-  ifelse(root < situation$income_cap, root, situation$income_cap)
-}
+# stated_income_cap <- function(situation) {
+#   # Retreive stated maximum income before payment reduces to $0 from situation.
+#   situation$income_cap
+# }
+# 
+# calc_income_cap <- function(situation) {
+#   # Calculate maximum income before payment actually reduces to $0.
+#   root <- uniroot(function(x) situation$max_payment - situation$step - (x-situation$t2)*situation$r2, interval = c(500, 2000))$root
+#   ifelse(root < situation$income_cap, root, situation$income_cap)
+# }
 
 
 # Case analysis -----------------------------------------------------------
@@ -68,24 +78,24 @@ situations <- list(
     label = "Single, under 18, living at home",
     max_payment = 462.5,
     thresholds = c(437.0, 524.0),
-    rates = c(0.5, 0.6),
-    income_cap = 880.0
+    rates = c(0.5, 0.6)
+    # income_cap = 880.0
   ),
   
   single_children = set_situation(
     label = "Single with children",
     max_payment = 606.0,
     thresholds = c(437.0, 524.0),
-    rates = c(0.5, 0.6),
-    income_cap = 1476.84
+    rates = c(0.5, 0.6)
+    # income_cap = 1476.84
   ),
   
   couple_children = set_situation(
     label = "In a couple, with children",
     max_payment = 507.9,
     thresholds = c(437.0, 524.0),
-    rates = c(0.5, 0.6),
-    income_cap = 1310.84
+    rates = c(0.5, 0.6)
+    # income_cap = 1310.84
   )
   
 )
@@ -197,4 +207,29 @@ income_cap_diff <- data.frame(
   Stated = sapply(situations, stated_income_cap)
 ) %>%
   mutate(Difference = Stated - Calculated)
- 
+
+
+
+# Realistic income analysis -----------------------------------------------
+
+## Collect parameters used to simulate N samples from a truncated Normal distribution
+N <- 26
+params <- expand.grid(
+  mu = seq(400, 1000, 100),
+  sigma = seq(100, 400, 100)
+)
+
+## Simulate N fornightly samples for parameter set
+X <- t(apply(params, 1, function(p) msm::rtnorm(N, mean=p[1], sd=p[2], lower=0)))
+colnames(X) <- paste0("X", 1:dim(X)[2])
+
+## Gather parameters with simulations and compute payment recieved for all situations
+income_sim <- cbind(params, X) %>%
+  pivot_longer(cols=starts_with("X"), names_to="fortnight", values_to="income") %>%
+  bind_cols(lapply(situations, payment_received, .$income))
+
+
+## Next step would be to get payment entitlement (should we use empirical or theoretical mean income?), then find the difference at each fortnight for each situation
+
+
+
