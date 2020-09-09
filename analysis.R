@@ -106,17 +106,17 @@ payment_data <- data.frame(
   lapply(situations, payment_received, income)
 )
 
-stated_income_caps <- data.frame(
-  income = sapply(situations, stated_income_cap),
-  value = 0,
-  row.names = NULL
-)
-
-calculated_income_caps <- data.frame(
-  income = sapply(situations, calc_income_cap),
-  value = 0,
-  row.names = NULL
-)
+# stated_income_caps <- data.frame(
+#   income = sapply(situations, stated_income_cap),
+#   value = 0,
+#   row.names = NULL
+# )
+# 
+# calculated_income_caps <- data.frame(
+#   income = sapply(situations, calc_income_cap),
+#   value = 0,
+#   row.names = NULL
+# )
 
 
 png("payment_recieved_example.png", units="in", width=6, height=5, pointsize=9, res=160)
@@ -212,24 +212,58 @@ income_cap_diff <- data.frame(
 
 # Realistic income analysis -----------------------------------------------
 
-## Collect parameters used to simulate N samples from a truncated Normal distribution
+robodebt_difference <- function(
+  situation,
+  N,
+  mean,
+  sd
+) {
+  # Simulate N fortnightly income periods and calculate Robodebt algorithm differential.
+  # args:
+    # situation: situation list object
+    # N: number of fortnightly periods
+    # mean: vector of means from which truncated Gaussian income will be simulated
+    # sd: vector of standard deviations from which truncated Gaussian income will be simulated
+  # value:
+    # df: data frame containing simulated income and details on payment differential
+  
+  ## Collect parameters used to simulate N samples from a truncated Gaussian distribution
+  params <- expand.grid(mean, sd)
+  colnames(params) <- c("mean", "sd")
+  
+  ## Simulate N fornightly samples for each parameter set
+  sim_income <- t(apply(params, 1, function(p) msm::rtnorm(N, mean=p[1], sd=p[2], lower=0)))
+  colnames(sim_income) <- paste0("X", 1:dim(X)[2])
+  
+  ## Gather parameters with simulations and compute payment entitled, recieved and the difference
+  df <- cbind(params, rowMeans(sim_income), sim_income) %>%
+    rename("fnight_avg_income" = "rowMeans(sim_income)") %>%
+    pivot_longer(cols=starts_with("X"), names_to="fortnight", values_to="sim_income") %>%
+    select(fortnight, everything()) %>%
+    mutate(
+      fortnight = as.numeric(gsub("[^0-9.-]", "", fortnight)),
+      payment_entitled = payment_received(situation, fnight_avg_income),
+      payment_received = payment_received(situation, sim_income),
+      difference = payment_entitled - payment_received
+    )
+  
+  return(df)
+}
+
 N <- 26
-params <- expand.grid(
-  mu = seq(400, 1000, 100),
-  sigma = seq(100, 400, 100)
-)
+mu <- seq(400, 1000, 100)
+sig <- seq(100, 400, 100)
 
-## Simulate N fornightly samples for parameter set
-X <- t(apply(params, 1, function(p) msm::rtnorm(N, mean=p[1], sd=p[2], lower=0)))
-colnames(X) <- paste0("X", 1:dim(X)[2])
-
-## Gather parameters with simulations and compute payment recieved for all situations
-income_sim <- cbind(params, X) %>%
-  pivot_longer(cols=starts_with("X"), names_to="fortnight", values_to="income") %>%
-  bind_cols(lapply(situations, payment_received, .$income))
+df1 <- robodebt_difference(situations$single_under18_home, N, mu, sig)
+df2 <- robodebt_difference(situations$single_children, N, mu, sig)
+df3 <- robodebt_difference(situations$couple_children , N, mu, sig)
 
 
-## Next step would be to get payment entitlement (should we use empirical or theoretical mean income?), then find the difference at each fortnight for each situation
+df1 %>% 
+  ggplot(aes(x=fortnight, y=difference, color=interaction(mean, sd))) +
+  geom_point()
 
-
-
+df1 %>%
+  ggplot(aes(x=fortnight, y=difference)) +
+  geom_point() +
+  facet_grid(mean ~ sd)
