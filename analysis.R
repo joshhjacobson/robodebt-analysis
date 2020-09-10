@@ -2,6 +2,7 @@
 ## Social Security payment recieved
 
 library(tidyverse)
+library(gridExtra)
 
 
 calc_income_cap <- function(
@@ -216,7 +217,8 @@ robodebt_difference <- function(
   situation,
   N,
   mean,
-  sd
+  sd,
+  seed = 1
 ) {
   # Simulate N fortnightly income periods and calculate Robodebt algorithm differential.
   # args:
@@ -224,6 +226,7 @@ robodebt_difference <- function(
     # N: number of fortnightly periods
     # mean: vector of means from which truncated Gaussian income will be simulated
     # sd: vector of standard deviations from which truncated Gaussian income will be simulated
+    # seed: simulation seed
   # value:
     # df: data frame containing simulated income and details on payment differential
   
@@ -231,21 +234,26 @@ robodebt_difference <- function(
   params <- expand.grid(mean, sd)
   colnames(params) <- c("mean", "sd")
   
-  ## Simulate N fornightly samples for each parameter set
+  ## Simulate N fornightly samples for each parameter set (along rows)
   sim_income <- t(apply(params, 1, function(p) msm::rtnorm(N, mean=p[1], sd=p[2], lower=0)))
-  colnames(sim_income) <- paste0("X", 1:dim(X)[2])
+  colnames(sim_income) <- paste0("X", 1:dim(sim_income)[2])
   
   ## Gather parameters with simulations and compute payment entitled, recieved and the difference
-  df <- cbind(params, rowMeans(sim_income), sim_income) %>%
-    rename("fnight_avg_income" = "rowMeans(sim_income)") %>%
-    pivot_longer(cols=starts_with("X"), names_to="fortnight", values_to="sim_income") %>%
+  df <- cbind(params, sim_income) %>%
+    mutate(notional_fnight_income = rowSums(select(., num_range("X", 1:N))) * 14/365) %>%
+    pivot_longer(cols=num_range("X", 1:N), names_to="fortnight", values_to="sim_income") %>%
     select(fortnight, everything()) %>%
     mutate(
-      fortnight = as.numeric(gsub("[^0-9.-]", "", fortnight)),
-      payment_entitled = payment_received(situation, fnight_avg_income),
-      payment_received = payment_received(situation, sim_income),
+      # fortnight = as.numeric(gsub("[^0-9.-]", "", fortnight)),
+      payment_entitled = payment_received(situations$single_under18_home, notional_fnight_income),
+      payment_received = payment_received(situations$single_under18_home, sim_income),
       difference = payment_entitled - payment_received
-    )
+    ) %>%
+    group_by(mean, sd) %>%
+    summarise(net_difference = sum(difference)) %>%
+    mutate_if(is.numeric, round, 2)
+  
+  colnames(df) <- c("mean", "sd", paste(situation$label, "(Net difference)"))
   
   return(df)
 }
@@ -254,16 +262,30 @@ N <- 26
 mu <- seq(400, 1000, 100)
 sig <- seq(100, 400, 100)
 
-df1 <- robodebt_difference(situations$single_under18_home, N, mu, sig)
-df2 <- robodebt_difference(situations$single_children, N, mu, sig)
-df3 <- robodebt_difference(situations$couple_children , N, mu, sig)
+# df1 <- robodebt_difference(situations$single_under18_home, N, mu, sig)
+#
+# df1 %>% 
+#   ggplot(aes(x=fortnight, y=net_difference, color=interaction(mean, sd))) +
+#   geom_point()
+# 
+# df1 %>%
+#   ggplot(aes(x=fortnight, y=net_difference)) +
+#   geom_point() +
+#   facet_grid(mean ~ sd)
 
 
-df1 %>% 
-  ggplot(aes(x=fortnight, y=difference, color=interaction(mean, sd))) +
-  geom_point()
+## Compute total Robodebt difference for each situation with all parameter sets
+df.1 <- lapply(situations, robodebt_difference, N, mu, sig, 1) %>% 
+  reduce(left_join, by=c("mean", "sd"))
 
-df1 %>%
-  ggplot(aes(x=fortnight, y=difference)) +
-  geom_point() +
-  facet_grid(mean ~ sd)
+df.2 <- lapply(situations, robodebt_difference, N, mu, sig, 2) %>% 
+  reduce(left_join, by=c("mean", "sd"))
+
+pdf("robodebt_diff_seed1.pdf", height=9, width=14, pointsize=11)
+grid.table(df.1)
+dev.off()
+
+pdf("robodebt_diff_seed2.pdf", height=9, width=14, pointsize=11)
+grid.table(df.2)
+dev.off()
+
